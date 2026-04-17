@@ -1,0 +1,135 @@
+---
+name: stm32-build-flash
+description: 自動編譯 STM32CubeIDE Makefile 專案並用 ST-Link (STM32_Programmer_CLI) 燒錄 MCU。編譯時會產生 .elf、.bin、.hex 三種格式。當使用者想要「編譯 STM32」、「build STM32」、「make STM32」、「燒錄 STM32」、「flash STM32」、「下載韌體到 STM32」、「把 hex/bin/elf 燒進去」、「清除編譯」、「clean STM32」、「一鍵 build + flash」、「編完燒進去」、在 STM32CubeIDE 專案目錄中做編譯燒錄相關動作，或提到 STM32_Programmer_CLI、ST-Link 燒錄等情境時，立刻觸發此 skill。環境假設是 WSL/Git Bash，會自動偵測 arm-none-eabi-gcc、make、STM32_Programmer_CLI 的位置（先找 PATH，找不到會找 STM32CubeIDE / STM32CubeProgrammer 的常見安裝路徑）。
+---
+
+# STM32 Build & Flash
+
+自動化 STM32CubeIDE Makefile 專案的編譯與燒錄流程。
+
+## 使用時機
+
+當使用者要對 STM32 專案做以下任一動作時使用本 skill：
+
+- 編譯韌體（想要 `.elf` / `.bin` / `.hex`）
+- 用 ST-Link 燒錄 MCU
+- 一鍵「編譯後直接燒進去」
+- Clean 掉舊的編譯產物
+- 只燒錄現有的 hex/bin 檔，不重新編譯
+
+這個 skill 針對 **STM32CubeIDE 產生的 Makefile 專案**設計（Debug/Release 資料夾下有 Makefile 的那種），燒錄工具是 **STM32_Programmer_CLI**（ST-Link CLI），執行環境是 **WSL 或 Git Bash**。
+
+## 核心工具
+
+所有動作都透過 `scripts/stm32.sh` 執行，這支腳本會：
+
+1. 自動找 `make`、`arm-none-eabi-gcc`、`STM32_Programmer_CLI`（先找 PATH，找不到會掃 STM32CubeIDE 的 plugins 目錄和 `C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\`）
+2. 把 WSL / Git Bash 的路徑轉成 Windows 原生路徑再餵給 `STM32_Programmer_CLI.exe`（這個工具是 Windows exe，不吃 `/mnt/c/...`）
+3. 如果 Makefile 沒產 `.bin`/`.hex`，自動用 `arm-none-eabi-objcopy` 補齊
+4. 回報檔案大小、成功訊息、或失敗原因
+
+## 指令速查
+
+從含 Makefile 的目錄（通常是 `<專案>/Debug/`）執行：
+
+```bash
+# 只編譯（產出 .elf / .bin / .hex）
+bash scripts/stm32.sh build
+
+# 只燒錄（自動找當前目錄下的 .hex）
+bash scripts/stm32.sh flash
+
+# 指定要燒的檔案
+bash scripts/stm32.sh flash path/to/firmware.hex
+
+# 編譯後立刻燒錄
+bash scripts/stm32.sh build-flash
+
+# Clean
+bash scripts/stm32.sh clean
+
+# 在別的目錄執行
+bash scripts/stm32.sh build --project-dir ~/projects/MyApp/Debug
+```
+
+## 常用參數
+
+| 參數 | 說明 | 預設 |
+|---|---|---|
+| `--project-dir <path>` | Makefile 所在目錄 | `.` |
+| `--jobs <N>` | `make -jN` 並行編譯 | CPU 核心數 |
+| `--format hex\|elf\|bin` | 燒錄哪個格式 | `hex` |
+| `--address <hex>` | `.bin` 燒錄起始位址 | `0x08000000` |
+| `--verbose` / `-v` | 顯示完整輸出 | 關 |
+
+## 工作流程（Claude 實際操作時的步驟）
+
+### 第一步：搞清楚專案位置
+
+STM32CubeIDE 的 Makefile **不在專案根目錄**，而是在 `<專案>/Debug/Makefile` 或 `<專案>/Release/Makefile`。如果使用者只給了專案根目錄，要提醒他們並推斷 Debug 資料夾的位置（用 `ls` 確認）。
+
+如果使用者沒明確指定，預設找 `Debug/`。如果他們的專案用 `Release/`，記得加 `--project-dir <path>/Release`。
+
+### 第二步：確認工具可用
+
+第一次跑之前可以先試：
+
+```bash
+bash scripts/stm32.sh build --verbose
+```
+
+`--verbose` 會印出找到的 `make`、`gcc`、`CLI` 路徑。如果腳本回 `exit 3`（找不到工具），就要問使用者是否有安裝 STM32CubeIDE 或 STM32CubeProgrammer，或是否安裝在非標準位置（需要手動加入 PATH）。
+
+### 第三步：執行對應的指令
+
+根據使用者的意圖：
+
+- **「編譯」/「build」/「make」** → `build`
+- **「燒錄」/「flash」/「下載」/「燒進去」** → `flash`
+- **「編完燒進去」/「build 完燒錄」/「一鍵燒錄」** → `build-flash`
+- **「清掉編譯檔」/「clean」/「重新編譯」（先 clean 再 build）** → `clean`
+
+### 第四步：解讀結果
+
+腳本的退出碼：
+
+- `0` 成功
+- `1` 編譯失敗 → 預設只顯示最後 20 行錯誤；叫使用者加 `--verbose` 看完整訊息
+- `2` 燒錄失敗 → 可能是 ST-Link 沒接好、MCU 沒上電、或 RDP 保護；查 `references/troubleshooting.md`
+- `3` 工具找不到 → 幫使用者確認安裝
+- `4` 檔案找不到 → 確認 `--project-dir` 或燒錄檔案路徑
+- `5` 參數錯誤
+
+## 重要細節
+
+### 為什麼要做路徑轉換
+
+`STM32_Programmer_CLI.exe` 是 Windows 原生程式，在 WSL 裡雖然能被執行（因為 WSL 支援 interop），但它**不理解** `/mnt/c/Users/...` 這種路徑。腳本用 `wslpath -w` 或 `cygpath -w` 把路徑轉成 `C:\Users\...` 再傳進去。這段邏輯寫在 `to_native_path()` 裡。
+
+如果使用者回報「找不到檔案」但檔案明明存在，八成是這個轉換沒生效（例如 WSL 沒 `wslpath`、檔案在 `/tmp` 不在 `/mnt/c`）。處理方式：提醒使用者把檔案放到 `/mnt/c/...` 下，或在純 Linux 下用開源工具如 `openocd`（但那超出此 skill 範圍）。
+
+### .bin 燒錄為什麼要起始位址
+
+`.hex` 和 `.elf` 格式內含位址資訊，CLI 知道要寫到哪。`.bin` 只是一串 raw bytes，必須告訴 CLI 從哪開始寫。STM32 的 Flash 絕大多數從 `0x08000000` 開始——但如果是 bootloader + app 的切分結構，app 可能在 `0x08008000` 之類，這時要用 `--address` 指定。不確定時建議使用者改用 `.hex`。
+
+### 為什麼 Makefile 通常已經有 .bin/.hex
+
+STM32CubeIDE 產生的 Makefile 在 `all:` 目標裡已經呼叫過 `arm-none-eabi-objcopy -O binary` 和 `-O ihex`。我們的腳本只是在沒看到這兩個檔案時做 fallback，不會重複做工。
+
+### 不要在 Linux 原生工具鏈 + WSL 的情境下亂搞
+
+如果使用者是在**純 Linux**（沒掛 `/mnt/c`）、用 apt 裝的 `gcc-arm-none-eabi` 和 `stlink-tools`（`st-flash` 那一套）跑 STM32，那 `STM32_Programmer_CLI` 大概不存在。這個 skill 不處理這種情境——看到明顯不匹配（例如 WSL 但偵測不到任何 Windows ST 工具），如實告訴使用者並建議改用 `openocd` 或 `st-flash`。
+
+## 疑難排解
+
+燒錄失敗或連不上 ST-Link 時，看 `references/troubleshooting.md`。
+
+## 回報訊息風格
+
+腳本已經用色彩區分 INFO/OK/WARN/ERROR。Claude 在總結時維持這個精簡風格——跑完後只需要：
+
+1. 告訴使用者成功或失敗
+2. 列出產出檔案的路徑（build 的情況）
+3. 如果失敗，把最後幾行錯誤貼出來並給建議
+
+不需要每次都把完整 stdout 倒進 chat，除非使用者要求。
