@@ -6,6 +6,14 @@
 
 ## 今日總結
 
+### 2026/04/17
+
+#### 完成項目
+- 安裝 stm32-build-flash skill 到全域 skills 目錄（`~/.claude/skills/stm32-build-flash/`）
+- 將 `.skill` 副檔名轉換為 Claude Code 標準的 `SKILL.md` 格式
+- 完整複製 references/（troubleshooting.md）與 scripts/（stm32.sh）子目錄
+- 確認 skill 已註冊並出現在可用 skills 清單中（觸發關鍵字：build STM32、flash STM32、一鍵燒錄等）
+
 ### 2026/04/15
 
 #### 完成項目
